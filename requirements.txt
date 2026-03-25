@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pydantic
+celery
+redis
+sentence-transformers
+numpy
+psutil
+urllib3<2
