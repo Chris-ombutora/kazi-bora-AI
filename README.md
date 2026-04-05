@@ -41,3 +41,4 @@ This is the backend service for processing and matching job candidates to job de
 ## Endpoints
 - `POST /match`: Submit a job description and a list of candidates. Returns a `task_id`.
 - `GET /task/{task_id}`: Poll this endpoint to check progress or retrieve the final sorted batch match results (explainable scoring cards).
+- the code for ai scoring needs improvement juu nimeandika tu kitu basic.
