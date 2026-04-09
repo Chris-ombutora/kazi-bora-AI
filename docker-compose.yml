@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  db:
+    image: mariadb:10.6
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: kazibora
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./database:/docker-entrypoint-initdb.d
+
+  nlp-service:
+    build:
+      context: ./nlp-service
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=db
+      - DB_USER=root
+      - DB_PASS=root
+      - DB_NAME=kazibora
+    depends_on:
+      - db
+
+  php-backend:
+    build:
+      context: ./cv-processor-php
+    volumes:
+      - ./cv-processor-php:/var/www/html
+    ports:
+      - "8080:80"
+    environment:
+      - DB_HOST=db
+      - DB_USER=root
+      - DB_PASS=root
+      - DB_NAME=kazibora
+      - NLP_SERVICE_URL=http://nlp-service:8000/
+    depends_on:
+      - db
+      - nlp-service
+    # Run composer install on start to ensure dependencies are installed in the volume mount
+    command: bash -c "composer install && apache2-foreground"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  matcher-api:
+    build:
+      context: .
+      dockerfile: ./backend/Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8001"]
+
+  matcher-worker:
+    build:
+      context: .
+      dockerfile: ./backend/Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    command: ["celery", "-A", "backend.tasks.celery_app", "worker", "--loglevel=info"]
+
+volumes:
+  mariadb_data:
