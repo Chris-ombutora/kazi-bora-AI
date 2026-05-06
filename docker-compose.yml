@@ -1,0 +1,168 @@
+services:
+  db:
+    image: mariadb:10.6
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: kazibora
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./database:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  nlp-service:
+    build:
+      context: ./nlp-service
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=db
+      - DB_USER=root
+      - DB_PASS=root
+      - DB_NAME=kazibora
+    depends_on:
+      db:
+        condition: service_healthy
+
+  php-backend:
+    build:
+      context: ./cv-processor-php
+    volumes:
+      - ./cv-processor-php:/var/www/html
+    ports:
+      - "8080:80"
+    environment:
+      - DB_HOST=db
+      - DB_USER=root
+      - DB_PASS=root
+      - DB_NAME=kazibora
+      - NLP_SERVICE_URL=http://nlp-service:8000/
+    depends_on:
+      db:
+        condition: service_healthy
+      nlp-service:
+        condition: service_started
+    command: bash -c "composer install && apache2-foreground"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  matcher-api:
+    build:
+      context: .
+      dockerfile: ./backend/Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8001"]
+
+  matcher-worker:
+    build:
+      context: .
+      dockerfile: ./backend/Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "backend.tasks.celery_app", "worker", "--loglevel=info"]
+
+  # ──────────────────────────────────────────────────────────────
+  # Developer 3: Platform Core Backend (Laravel)
+  # Central orchestrator connecting all services
+  # ──────────────────────────────────────────────────────────────
+  platform-core:
+    build:
+      context: ./platform-core
+    volumes:
+      - ./platform-core:/var/www/html
+      - platform_storage:/var/www/html/storage
+    ports:
+      - "9000:9000"
+    environment:
+      - APP_NAME=KaziBora
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - APP_KEY=base64:dGhpc2lzYXRlc3RrZXlmb3JkZXZvbmx5MTIzNA==
+      - APP_URL=http://localhost:9000
+      - DB_CONNECTION=mysql
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_DATABASE=kazibora
+      - DB_USERNAME=root
+      - DB_PASSWORD=root
+      - QUEUE_CONNECTION=redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - NLP_SERVICE_URL=http://nlp-service:8000
+      - MATCHER_SERVICE_URL=http://matcher-api:8001
+      - JWT_SECRET=kazibora-dev-jwt-secret-change-in-prod
+      - JWT_TTL=1440
+      - MPESA_ENV=sandbox
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nlp-service:
+        condition: service_started
+      matcher-api:
+        condition: service_started
+    command: >
+      bash -c "composer install --no-interaction &&
+               php artisan migrate --force &&
+               php artisan serve --host=0.0.0.0 --port=9000"
+
+  # Laravel Queue Worker — processes CV parsing and scoring jobs asynchronously
+  platform-worker:
+    build:
+      context: ./platform-core
+    volumes:
+      - ./platform-core:/var/www/html
+      - platform_storage:/var/www/html/storage
+    environment:
+      - APP_NAME=KaziBora
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - APP_KEY=base64:dGhpc2lzYXRlc3RrZXlmb3JkZXZvbmx5MTIzNA==
+      - DB_CONNECTION=mysql
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_DATABASE=kazibora
+      - DB_USERNAME=root
+      - DB_PASSWORD=root
+      - QUEUE_CONNECTION=redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - NLP_SERVICE_URL=http://nlp-service:8000
+      - MATCHER_SERVICE_URL=http://matcher-api:8001
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      bash -c "composer install --no-interaction &&
+               php artisan queue:work redis --sleep=3 --tries=3 --max-time=3600"
+
+volumes:
+  mariadb_data:
+  platform_storage:

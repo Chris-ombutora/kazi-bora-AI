@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+*.md
+.env
+docker-compose.yml
+database/
+cv-processor-php/
+nlp-service/
+KaziBora_Market_Analysis*.docx
